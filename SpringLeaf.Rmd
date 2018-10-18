@@ -1,0 +1,584 @@
+---
+title: "SpringLeaf Direct Mail Marketing Response"
+author: 
+date: 19 Sept 2018
+output:
+  pdf_document:
+    toc: true
+  md_document:
+    variant: markdown_github
+  word_document: 
+    toc: true
+  html_document:
+    toc: true
+    toc_depth: 10
+    number_sections: true
+---
+##Overview
+SpringLeaf [^1] provides personal and auto loans to customers.  This 2016 Kaggle competition sought to optimize response rates for direct mail marketing, and it provided over 145,000 observations of 1934 anonymized features.  No time horizon is provided for the data, and no data dictionary is given.  The data is presented as separate training/test sets of roughly a 50/50 split.  
+
+Given the dimensions of the data, I first want to create a series of scripts to ingest the data and automatically assign classes to variables.  This was done with a series of assumptions on the data which are specified below.  After cleaning, I plan to use the `caret` package to create multiple models, to include gradiant boosting with the `XGBoost` package.  
+
+While cleaning, I found that `caret`'s built-in function `knnImpute` was not impressed with my existing level of cleaning 
+
+## Research Questions
+1. Given that the data is anonymized, there are limited (if any) assessments I can provide for the meaning of each feature.  The objective for this data will be minimizing prediction error.  
+
+### To Do
+1. Training data is significantly fewer missing values than the test data, so extrapolation needs to be more thorough for the test set.
+1. The ingest scripts use multiple for-loops & intermediate variables, which is neither R nor Tidy best practice.  But they work.  
+1. True/False variables are left as catagories rather than logicals, but that may be necessary to change in the future.  
+
+## Assumptions: what can we tell from the data, what are its limits, and what assumptions do we need to explicate in order to continue?
+     The data contains the anonymized data, so I have made the following assumptions
+1. Categorical data is assessed to be any feature with at least 95 levels of value.  Any missing values for catagorical data are left alone but assigned a level of 'None'.  
+1. No ordinal assumptions are made for any categorical data--that is, factors are not ranked--due the lack of a data dictionary. 
+1. Variables are assumed to be floating point/double based off the above assumption of >95 levels; *only these variables are centered and scaled*. 
+1. Features are omitted when over 65% of their values are missing.  In reality, there are obvious parts of the data that were bound together.  If I were to cut out out parts of data by a given percentage, I could find breakpoints for both rows and columns where data was joined together.
+1. Given the consistency of missing values for each observation, I assess NA values as missing data not at random (MNAR).
+1. Date-time objects are consistently provided in `dmy_hms` for the training data, but that needs validation for the test set
+1. Rows were omitted with over 25% of their values missing.  Other rows were omitted from `dttm` due to their randomness & the difficulty of imputing date values[^3].
+
+### How I think through the data?
+1. I don't like to delete data, so If there's a way to extrapolate missing values, I will.
+1. I apply functional programming, so I use (and write) functions in R from beginning to end, iteratively chopping away at the solution.
+1. **Variables/Features** are written in **bold**.  Classes and package names are written in `fixed width`. *italics* are used to specify other other attributes of the data, or add emphasis.   
+
+[^1]: SpringLeaf changed their name to OneMain Financial as of three months after launching this competition. 
+[^2]: https://www.kaggle.com/c/springleaf-marketing-response
+[^3]: Since date objects can be coerced to numerics, I could possibly create a random object generator for the 
+
+
+## Libraries Used
+```{r "Libraries", message=FALSE, warning=FALSE, results=FALSE, cache=TRUE}
+library(tidyverse)
+library(corrplot)
+library(graphics)
+library(tree)
+library(ggmap)    #ggmap used for geocode function
+library(reshape2)
+library(caret)
+
+library(mlbench)
+library(rpart)
+library(kernlab)
+library(VIM)
+
+# XG boost
+library(caret)
+library(plyr)
+library(dplyr)
+library(caTools)
+library(xgboost)
+ 
+options(width=250, max.print = 999999999)
+
+rm(possible.dates, na.count, na.percent)
+
+
+```
+
+
+
+## Import and Clean Data
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+a <- Sys.time()
+newtrain <- read_csv("train.csv")
+
+# Identify Factor Variables
+level.count <- train %>% mutate_all(funs(as.factor)) %>% sapply(nlevels) %>% unlist() %>% as.list.data.frame()    
+
+###this one works...edit the one at the bottom of the page
+factor.cols <- c()
+for (i in 1:length(level.count)){
+if(level.count[i] <= 95 ){                                       #specify columns with <=95 unique values as factors
+  factor.cols <- c(factor.cols, unlist(names(level.count[i])))
+ } 
+}
+
+
+# Idenitfy Date-Time Variables
+possible.dates <- train %>% mutate_all(funs(dmy_hms))
+
+date.cols <- c()
+for (i in 1:ncol(possible.dates)){
+  if(sum(is.na(pull(possible.dates, var = i))) / nrow(possible.dates[i]) < 1) {
+    date.cols <- c(date.cols, unlist(names(possible.dates[i])))
+ } 
+} 
+
+
+# Idenitfy numeric columns for centering/scaling 
+classes <- c()
+numeric.cols <- c()
+for (i in 1:ncol(train)) {
+  classes[i] <- train[,i] %>% unlist %>% class() 
+  if (classes[i] == "integer" | classes[i] == "numeric" | classes[i] == "double") {
+      numeric.cols <- c(numeric.cols, unlist(names(train[i])))
+  }
+}
+
+# Take the numeric columns and filter them with anti-joins from our previously identified factors and date colummns
+numeric.cols <- anti_join(tbl_df(numeric.cols), tbl_df(date.cols)) %>% 
+  anti_join(tbl_df(factor.cols)) %>%           
+  as.data.frame() %>% unlist() %>% unname()   
+
+numeric.cols <- numeric.cols[-1]     #remove index col from centering and scaling
+
+
+# FINALLY Coerce variables against the above lists
+train <- train %>%
+  mutate_at(vars(factor.cols), as.factor) %>%
+  mutate_at(vars(date.cols), dmy_hms) %>% 
+  mutate_at(vars(numeric.cols), scale)
+
+  # map_lgl(.x, .f, ...)
+
+b <- Sys.time()
+print(b-a)
+
+
+
+## WORKING Identify a Logical
+logical.cols <- c()
+factor.cols <- c()
+for (i in 1:length(level.count)){
+if(level.count[i] == 1 ){
+     logical.cols <- c(logical.cols, unlist(names(level.count[i]))) 
+} else if(level.count[i] > 1 & level.count[i] <= 95 ){
+  factor.cols <- c(factor.cols, unlist(names(level.count[i])))
+ } 
+}
+
+rm(possible.dates, na.count, na.percent)
+
+# write to CSV
+train %>% sample_frac(size = .024) %>%
+  write_excel_csv("cleaned_train.csv", na = "NA", append = FALSE, col_names = TRUE)  # export CSV for Tableau
+
+```
+
+
+### Missing Value Analysis
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+# View all missing values
+ggplot_missing(train)
+![Plot of Missing Values](/Users/admin/Google Drive/sulgrave/SpringLeaf/ggplot_missing.png)
+```
+We see distinct cross patterns here, indicating that for whatever reason, these values do not seem to be missing at random
+
+
+```{r, cache=TRUE}
+# View all Columns of NAs
+NA.cols <- tibble(Variable = names(train), Class = map_chr(train, type_sum), 
+       Count.NA = map_int(train, function(x) {sum(is.na(x))}),
+       Perc.NA = map_dbl(train, function(x) {sum(is.na(x))/length(x)})
+       )
+
+#View highest NA Columns
+NA.cols %>% arrange(desc(Perc.NA)) %>% print(n=200)
+
+#visualize NA
+ggplot(NA.cols, aes(x = Class, fill=Perc.NA>.15))+ 
+  geom_bar() +
+  labs(title = "Missing Values by Type", y = "Count") +
+  ylim(c(0,25))
+```
+
+
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+###NOT USEFUL
+# ggplot(NA.cols, aes(x = Class, y = Count.NA)) + geom_point()
+# 
+# NA.cols %>% ggplot(aes(Count.NA, fill = Class)) + 
+#   geom_histogram(binwidth = 5)
+# 
+# qplot(NA.cols$Count.NA, geom="histogram")
+
+# Created named list of percentage of NA values
+sparse.cols <- train %>% sapply(function(x) {sum(is.na(x))/length(x)}) 
+
+# Remove columns beyond that that meet a threshold percentage (65%) of NA volues
+train <- train[sparse.cols < .65]
+
+
+```
+
+
+```{r, cache=TRUE}
+# View all Columns of NAs
+NA.rows <- tibble(RowNum = 1:nrow(train),
+                  ID = train$ID,
+                  NA.perc = apply(train, 1, function(x) sum(is.na(x))/length(x))
+                  )        
+#view highest NA rows
+NA.rows %>% arrange(desc(NA.perc)) %>% print(n=200)
+
+### Factors
+#filter out rows with more than 25% missing values
+sparse.rows <- NA.rows %>% filter(NA.perc > .25)  
+train <- anti_join(train, sparse.rows, on=ID)
+# Specify NA values as a level in factor variables
+train <- train %>% mutate_if(is.factor, fct_explicit_na, na_level = "None")
+
+### Date-Time
+## These columns all have identical rows of missing values, so this needs to be updated
+# Check count of NA for date columns and remove missing
+dttm.cols <- train[ifelse(map_chr(train, type_sum) == "dttm", TRUE,FALSE)] %>% names
+      ## identical to -->    train %>% select_if(~type_sum(.) == "dttm") 
+# bind the above table with row IDs to filter out NA rows
+dttm.cols.omit.NA <- train  %>% select(ID, dttm.cols) %>% filter_all(any_vars(is.na(.))) %>% select(ID)
+# filter out rows with NA values for remaining date-time 
+train <- anti_join(train, dttm.cols.omit.NA, on=ID)
+
+### Characters
+# Check each column and assign NA = -1
+chr.cols <- train %>% filter_if(is.character, any_vars(is.na(.))) %>% select_if(is.character)
+
+for (i in 1:ncol(chr.cols)) {
+  for (j in 1:nrow(chr.cols[i])) {
+    if(is.na(chr.cols[j,i])) {
+       chr.cols[j,i] <- -1 
+    } 
+    }
+}  
+
+#test for NAs 
+ifelse(map_int(chr.cols, function(x) {sum(is.na(x))}) == 0, "None", "Try Again")
+
+
+
+
+
+# Imputing NA's with median 
+train <- 
+  train %>% mutate_all(~ifelse(is.na(.), median(., na.rm = TRUE), .))
+
+test %>% 
+  mutate_all(~ifelse(is.na(.), median(., na.rm = TRUE), .)) -> test
+
+
+#View sparsity in row for data missing not at random (MNAR)
+train %>% ggplot_missing()
+
+NA.TRUES <- train %>% apply(2, anyNA)
+na.trues <- train[NA.TRUES] %>% apply(1, anyNA)
+
+
+NA.TRUES <- head %>% apply(2, anyNA)
+na.trues <- head[NA.TRUES] %>% apply(1, anyNA)
+
+
+# Occupation data train[,"VAR_0493"] 
+# data is assigned -1 for missing data by default   
+```
+53 entries are missing over 25% of their values.  918 are missing over 15%
+There are *significanlty more* missing values in the test set, so these should eventually be imputed
+
+
+> Nothing below this is my code
+
+
+## Run a crap-ton of classification models w/ Caret
+```{r}
+#multiple classification comparison  using caret package
+cat("replacing missing values with -1\n")
+train[is.na(train)] <- -1
+
+preProcess(train, method = c("knnImpute", "nzv")) 
+  
+
+# set.seed(1056)
+# svmFit <- train(Class ~ .,
+#                 data = GermanCreditTrain,
+#                 method = "svmRadial",
+#                 preProc = c("center", "scale"))
+# 
+# preProcess(segData,method = c("BoxCox", "center", "scale", "pca"))
+
+
+# prepare training scheme
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+# CART
+set.seed(7)
+fit.cart <- train(target~., data=train, method="rpart", trControl=control)
+# LDA
+set.seed(7)
+fit.lda <- train(target~., data=train, method="lda", trControl=control, preProcess = 'knnImpute')
+# SVM
+set.seed(7)
+fit.svm <- train(target~., data=diabetes, method="svmRadial", preProcess = 'knnImpute')
+# kNN
+set.seed(7)
+fit.knn <- train(target~., data=diabetes, method="knn", trControl=control,preProcess = 'knnImpute')
+# Random Forest
+set.seed(7)
+fit.rf <- train(target~., data=train, method="ranger", trControl=control, preProcess = 'knnImpute')
+# collect resamples
+results <- resamples(list(CART=fit.cart, LDA=fit.lda, SVM=fit.svm, KNN=fit.knn, RF=fit.rf))
+
+
+# summarize the distributions
+summary(results)
+# boxplots of results
+bwplot(results)
+
+
+
+```
+
+
+```{r}
+# Competition: https://inclass.kaggle.com/c/pred-411-2016-04-u3-wine/
+# This is a file to perform 
+# - xgboost model training (linear booster used)
+# - predition on the imputed testing set, using the fitted xgboost model 
+# - preparation of a Kaggle submission file 
+# It is intended to run from a command line in a batch mode, using the Rscript command below: 
+# Rscript --vanilla code/xgboost.R data/train_imputed.csv data/test_imputed.csv 10 2 0.0001 1 data/xgboost_submission.csv code/config.R
+#
+# 8 arguments are required 
+# - input file name for imputed training data csv,
+# - input file name for imputed testing data csv
+# - nrounds - number of rounds in the xgboost search (integer)
+# - depth - depth of boosting search (integer)
+# - alpha  - one of the linear booster-specific parameters (float)
+# - lambda - one of the linear boster-specific parameters (float)
+# - output file name for the result submission csv file (in a ready-for-Kaggle-upload format)
+# - the configuration file of the solution in a format of R script module (please use config.R provided)
+#
+# Note: please refer to http://xgboost.readthedocs.io/en/latest/R-package/xgboostPresentation.html or other
+#       links in the comments below for more details on xgboost parameters
+ 
+library(caret)
+library(plyr)
+library(dplyr)
+library(caTools)
+library(xgboost)
+ 
+strt<-Sys.time()
+ 
+args = commandArgs(trailingOnly=TRUE)
+if (!length(args) == 8) {
+  stop("Seven arguments must be supplied (input file name for inputed traing data csv,
+        input file name for imputed testing data csv, 
+       split ration value (0..1), seed value,
+       output file name for Kaggle result submission csv,
+       solution configuration file 'code/config.R')", call.=FALSE)
+}
+ 
+fname_training_set <- args[1]
+fname_testing_set <- args[2]
+n.rounds <- args[3]
+n.depth <- args[4]
+n.alpha <- args[5]
+n.lambda <- args[6]
+fname_kaggle_submission <- args[7]
+fname_config <- args[8]
+ 
+source(fname_config) # import the config file as R source as it is the R source code indeed
+ 
+# regression modeller - xgboost
+# ref.: http://xgboost.readthedocs.io/en/latest/R-package/xgboostPresentation.html
+# https://github.com/dmlc/xgboost/blob/master/doc/parameter.md
+# https://cran.r-project.org/web/packages/xgboost/vignettes/xgboostPresentation.html
+# https://www.kaggle.com/michaelpawlus/springleaf-marketing-response/xgboost-example-0-76178/code
+xgboostRegressionModeller <- function (df.train, df.test, formula2verify,
+                                       nrounds=50, depth=14, alpha = 0.0001, lambda = 1) {
+    print(paste0("Running xgboost linear modeller"))
+    feature.names <- names(df.train)[2:ncol(df.train)-1]
+    # names(train)  # 1934 variables
+     
+    print(paste0("assuming text variables are categorical & replacing 
+                 them with numeric ids\n"))
+    for (f in feature.names) {
+        if (class(train[[f]])=="character") {
+            levels <- unique(c(df.train[[f]], df.test[[f]]))
+            df.train[[f]] <- as.integer(factor(df.train[[f]], levels=levels))
+            df.test[[f]]  <- as.integer(factor(df.test[[f]],  levels=levels))
+        }
+    }
+     
+    set.seed(825)
+    split <- sample.split(df.train$TARGET, SplitRatio = 0.8)
+     
+    # Create training and testing sets
+    qualityTrain <- subset(df.train, split == TRUE)
+    qualityVal <- subset(df.train, split == FALSE)
+     
+     
+    # make training matrix
+    dtrain <- xgb.DMatrix(data.matrix(qualityTrain[,feature.names]), 
+                          label=qualityTrain$TARGET)
+     
+    # make validation matrix
+    dval <- xgb.DMatrix(data.matrix(qualityVal[,feature.names]), 
+                        label=qualityVal$TARGET)
+     
+    watchlist <- list(eval = dval, train = dtrain)
+     
+    param <- list(  objective           = "reg:linear", 
+                    booster             = "gblinear",
+                    eta                 = 0.001,
+                    max_depth           = depth,  # changed from default of 6
+                    subsample           = 0.6,
+                    colsample_bytree    = 0.6,
+                    eval_metric         = "rmse",
+                    alpha = alpha, 
+                    lambda = lambda
+    )
+     
+    clf <- xgb.train(   params              = param, 
+                        data                = dtrain, 
+                        nrounds             = nrounds, # changed from 300
+                        verbose             = 2, 
+                        early.stop.round    = 10,
+                        watchlist           = watchlist,
+                        maximize            = TRUE)
+     
+    # predict
+    f.predict <- predict(clf, data.matrix(df.test[,feature.names]))
+     
+    f.predict
+}
+ 
+strt<-Sys.time()
+ 
+# read data
+print(paste("Load data",Sys.time()))
+train <- read.csv(fname_training_set)
+test <- read.csv(fname_testing_set)
+ 
+str(train)
+str(test)
+ 
+# basic split of test and train set by STARS provided or not
+train1 <- subset(train, STARS == 0)
+train2 <- subset(train, STARS > 0)
+ 
+test1 <- subset(test, STARS == 0)
+test2 <- subset(test, STARS > 0)
+ 
+testIndex1 <- test1$INDEX
+testIndex2 <- test2$INDEX
+ 
+# prepare data for prediction
+train1 <- select(train1, -INDEX, -STARS)
+train2 <- select(train2, -INDEX)
+test1 <- select(test1, -INDEX, -STARS)
+test2 <- select(test2, -INDEX)
+ 
+# fname_kaggle_submission <- args[7]
+ 
+# train the models
+print(paste("Train the models and make predictions",Sys.time()))
+frm <- as.formula(TARGET ~ .)
+ 
+predict1 <- xgboostRegressionModeller (train1, test1, frm,
+                       nrounds = n.rounds, depth = n.depth, alpha = n.alpha, lambda = n.lambda)
+predict2 <-xgboostRegressionModeller (train2, test2, frm,
+                       nrounds = n.rounds, depth = n.depth, alpha = n.alpha, lambda = n.lambda)
+ 
+# prepare submission
+print(paste("Prepare submission file",Sys.time()))
+ 
+#INDEX,P_TARGET
+df1 <- data.frame(INDEX = testIndex1, P_TARGET = predict1)
+df2 <- data.frame(INDEX = testIndex2, P_TARGET = predict2)
+MySubmission <- rbind(df1,df2)
+write.csv(MySubmission, fname_kaggle_submission, row.names=FALSE)
+ 
+print(paste("Finished data submission",Sys.time()))
+print(paste("Elapsed Time:",(Sys.time() - strt)))
+##################################################
+# That's all, folks!
+##################################################
+
+```
+
+
+
+## User-defined Functions
+```{r}
+propmiss <- function(dataframe) {
+	m <- sapply(dataframe, function(x) {
+		data.frame(
+			nmiss=sum(is.na(x)), 
+			n=length(x), 
+			propmiss=sum(is.na(x))/length(x)
+		)
+	})
+	d <- data.frame(t(m))
+	d <- sapply(d, unlist)
+	d <- as.data.frame(d)
+	d$variable <- row.names(d)
+	row.names(d) <- NULL
+	d <- cbind(d[ncol(d)],d[-ncol(d)])
+	return(d[order(d$propmiss), ])
+}
+
+
+###GGPLOT MISSING
+
+
+library(reshape2)
+library(ggplot2)
+
+ggplot_missing <- function(x){
+  
+  x %>% 
+    is.na %>%
+    melt %>%
+    ggplot(data = .,
+           aes(x = Var2,
+               y = Var1)) +
+    geom_raster(aes(fill = value)) +
+    scale_fill_grey(name = "",
+                    labels = c("Present","Missing")) +
+    theme_minimal() + 
+    theme(axis.title.x = element_blank()) + #original: axis.text.x  = element_text(angle=45, vjust=0.5)
+    labs(x = "Variables in Dataset",
+         y = "Observations")
+}
+
+```
+
+
+
+
+
+
+
+
+
+
+### Code Playground
+```{r}
+chr.cols <- train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>% names
+# bind the above table with row IDs to filter out NA rows
+chr.cols.omit.NA <- train  %>% select(ID, chr.cols) %>% filter_all(any_vars(is.na(.))) #%>% select(ID)
+      ### ~ identical to --> train %>% filter_if(is.character, any_vars(is.na(.))) %>% select_if(is.character) 
+      ### need a way to select_if() with ID
+# filter out rows with NA values for remaining date-time 
+train <- anti_join(train, dttm.cols.omit.NA, on=ID)
+
+
+chr.cols.test.NA
+
+wtf <- train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>%  filter_all(any_vars(is.na(.)))
+
+map int for each col in wtf then map_if == NA assign -1, value other wise
+map_int(chr.cols, function(x) {sum(is.na(x))}) == 0, "No NAs", 0)
+
+# if the count of NAs is non-zero, apppend the column names to a new vector
+ifelse(map_int(wtf, ~function(x) {(is.na(x))}) != TRUE, 1, 0) %>% ifelse(.>0,1,0)
+
+wtf %>% detect_index(is.na)
+
+
+train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>%  filter_all(any_vars(is.na(.)))
+
+
+
+
+```
