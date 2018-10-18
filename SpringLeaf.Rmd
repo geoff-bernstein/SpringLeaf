@@ -1,6 +1,6 @@
 ---
 title: "SpringLeaf Direct Mail Marketing Response"
-author: "Geoff Bernstein"
+author: 
 date: 19 Sept 2018
 output:
   pdf_document:
@@ -64,7 +64,7 @@ library(rpart)
 library(kernlab)
 library(VIM)
 
-# XG boo
+# XG boost
 library(caret)
 library(plyr)
 library(dplyr)
@@ -83,7 +83,7 @@ rm(possible.dates, na.count, na.percent)
 ## Import and Clean Data
 ```{r message=FALSE, warning=FALSE, cache=TRUE}
 a <- Sys.time()
-train <- read_csv("train.csv")
+newtrain <- read_csv("train.csv")
 
 # Identify Factor Variables
 level.count <- train %>% mutate_all(funs(as.factor)) %>% sapply(nlevels) %>% unlist() %>% as.list.data.frame()    
@@ -153,8 +153,8 @@ if(level.count[i] == 1 ){
 rm(possible.dates, na.count, na.percent)
 
 # write to CSV
-train %>% sample_frac(size = .008) %>%
-  write_excel_csv("head.csv", na = "NA", append = FALSE, col_names = TRUE)  # export CSV for Tableau
+train %>% sample_frac(size = .024) %>%
+  write_excel_csv("cleaned_train.csv", na = "NA", append = FALSE, col_names = TRUE)  # export CSV for Tableau
 
 ```
 
@@ -275,10 +275,8 @@ na.trues <- head[NA.TRUES] %>% apply(1, anyNA)
 53 entries are missing over 25% of their values.  918 are missing over 15%
 There are *significanlty more* missing values in the test set, so these should eventually be imputed
 
-```{r
 
-````}
-
+> Nothing below this is my code
 
 
 ## Run a crap-ton of classification models w/ Caret
@@ -303,7 +301,7 @@ preProcess(train, method = c("knnImpute", "nzv"))
 control <- trainControl(method="repeatedcv", number=10, repeats=3)
 # CART
 set.seed(7)
-fit.cart <- train(target~., data=train, method="rpart", trControl=control, preProcess = 'medianImpute')
+fit.cart <- train(target~., data=train, method="rpart", trControl=control)
 # LDA
 set.seed(7)
 fit.lda <- train(target~., data=train, method="lda", trControl=control, preProcess = 'knnImpute')
