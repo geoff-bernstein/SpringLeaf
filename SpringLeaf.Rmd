@@ -1,6 +1,6 @@
 ---
 title: "SpringLeaf Direct Mail Marketing Response"
-author: "Geoff Bernstein"
+author: 
 date: 19 Sept 2018
 output:
   pdf_document:
