@@ -185,6 +185,7 @@ ggplot(NA.cols, aes(x = Class, fill=Perc.NA>.15))+
   ylim(c(0,25))
 ```
 
+
 ```{r message=FALSE, warning=FALSE, cache=TRUE}
 ###NOT USEFUL
 # ggplot(NA.cols, aes(x = Class, y = Count.NA)) + geom_point()
@@ -202,7 +203,6 @@ train <- train[sparse.cols < .65]
 
 
 ```
-
 
 
 ```{r, cache=TRUE}
@@ -231,27 +231,22 @@ dttm.cols.omit.NA <- train  %>% select(ID, dttm.cols) %>% filter_all(any_vars(is
 # filter out rows with NA values for remaining date-time 
 train <- anti_join(train, dttm.cols.omit.NA, on=ID)
 
+### Characters
+# Check each column and assign NA = -1
+chr.cols <- train %>% filter_if(is.character, any_vars(is.na(.))) %>% select_if(is.character)
 
-### Character 
-# Check count of NA for date columns and remove missing
-chr.cols <- train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>% names
-# bind the above table with row IDs to filter out NA rows
-chr.cols.omit.NA <- train  %>% select(ID, chr.cols) %>% filter_all(any_vars(is.na(.))) #%>% select(ID)
-      ### ~ identical to --> rain %>% filter_if(is.character, any_vars(is.na(.))) %>% select_if(is.character) 
-      ### need a way to select_if() with ID
-# filter out rows with NA values for remaining date-time 
-train <- anti_join(train, dttm.cols.omit.NA, on=ID)
+for (i in 1:ncol(chr.cols)) {
+  for (j in 1:nrow(chr.cols[i])) {
+    if(is.na(chr.cols[j,i])) {
+       chr.cols[j,i] <- -1 
+    } 
+    }
+}  
+
+#test for NAs 
+ifelse(map_int(chr.cols, function(x) {sum(is.na(x))}) == 0, "None", "Try Again")
 
 
-chr.cols.test.NA
-
-wtf <- train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>%  filter_all(any_vars(is.na(.)))
-
-map int for each col in wtf then map_if == NA assign -1, value other wise
-map_int(wtf, function(x) {sum(is.na(x))}) == 0
-
-# if the count of NAs is non-zero, apppend the column names to a new vector
-ifelse(map_int(wtf, function(x) {sum(is.na(x))}) != 0, 1, 0) %>% ifelse(.>0,1,0)
 
 
 
@@ -547,5 +542,45 @@ ggplot_missing <- function(x){
     labs(x = "Variables in Dataset",
          y = "Observations")
 }
+
+```
+
+
+
+
+
+
+
+
+
+
+### Code Playground
+```{r}
+chr.cols <- train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>% names
+# bind the above table with row IDs to filter out NA rows
+chr.cols.omit.NA <- train  %>% select(ID, chr.cols) %>% filter_all(any_vars(is.na(.))) #%>% select(ID)
+      ### ~ identical to --> train %>% filter_if(is.character, any_vars(is.na(.))) %>% select_if(is.character) 
+      ### need a way to select_if() with ID
+# filter out rows with NA values for remaining date-time 
+train <- anti_join(train, dttm.cols.omit.NA, on=ID)
+
+
+chr.cols.test.NA
+
+wtf <- train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>%  filter_all(any_vars(is.na(.)))
+
+map int for each col in wtf then map_if == NA assign -1, value other wise
+map_int(chr.cols, function(x) {sum(is.na(x))}) == 0, "No NAs", 0)
+
+# if the count of NAs is non-zero, apppend the column names to a new vector
+ifelse(map_int(wtf, ~function(x) {(is.na(x))}) != TRUE, 1, 0) %>% ifelse(.>0,1,0)
+
+wtf %>% detect_index(is.na)
+
+
+train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>%  filter_all(any_vars(is.na(.)))
+
+
+
 
 ```
