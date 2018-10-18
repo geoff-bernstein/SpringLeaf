@@ -15,7 +15,7 @@ output:
     number_sections: true
 ---
 ##Overview
-SpringLeaf [^1] provides personal and auto loans to customers.  This 2016 Kaggle competition sought to optimize response rates for direct mail marketing, and it provided over 145,000 observations of 1934 anonymized features.  No time horizon is provided for the data, and no data dictionary is given.  The data is presented as separate training/test sets of roughly a 50/50 split.  
+SpringLeaf [^1] provides personal and auto loans to customers.  This 2016 Kaggle competition sought to optimize response rates for direct mail marketing, and it provided over 145,000 observations of 1934 anonymized features.  No time horizon is provided for the data, and no data dictionary is given.  The data is presented as separate training/test sets of roughly a 50/50 split.   
 
 Given the dimensions of the data, I first want to create a series of scripts to ingest the data and automatically assign classes to variables.  This was done with a series of assumptions on the data which are specified below.  After cleaning, I plan to use the `caret` package to create multiple models, to include gradiant boosting with the `XGBoost` package.  
 
