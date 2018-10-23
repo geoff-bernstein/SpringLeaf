@@ -52,17 +52,21 @@ While cleaning, I found that `caret`'s built-in function `knnImpute` was not imp
 ## Libraries Used
 ```{r "Libraries", message=FALSE, warning=FALSE, results=FALSE, cache=TRUE}
 library(tidyverse)
+library(lubridate)
+library(stringr)
 library(corrplot)
 library(graphics)
 library(tree)
 library(ggmap)    #ggmap used for geocode function
 library(reshape2)
-library(caret)
+
 
 library(mlbench)
 library(rpart)
 library(kernlab)
 library(VIM)
+
+library(recipes)
 
 # XG boost
 library(caret)
@@ -71,9 +75,12 @@ library(dplyr)
 library(caTools)
 library(xgboost)
  
+library(caretEnsemble)
+
+
 options(width=250, max.print = 999999999)
 
-rm(possible.dates, na.count, na.percent)
+rm(possible.dates, na.count, na.percent, i, j, mod1)
 
 
 ```
@@ -83,7 +90,7 @@ rm(possible.dates, na.count, na.percent)
 ## Import and Clean Data
 ```{r message=FALSE, warning=FALSE, cache=TRUE}
 a <- Sys.time()
-newtrain <- read_csv("train.csv")
+train <- read_csv("train.csv")
 
 # Identify Factor Variables
 level.count <- train %>% mutate_all(funs(as.factor)) %>% sapply(nlevels) %>% unlist() %>% as.list.data.frame()    
@@ -134,10 +141,6 @@ train <- train %>%
 
   # map_lgl(.x, .f, ...)
 
-b <- Sys.time()
-print(b-a)
-
-
 
 ## WORKING Identify a Logical
 logical.cols <- c()
@@ -149,8 +152,6 @@ if(level.count[i] == 1 ){
   factor.cols <- c(factor.cols, unlist(names(level.count[i])))
  } 
 }
-
-rm(possible.dates, na.count, na.percent)
 
 # write to CSV
 train %>% sample_frac(size = .024) %>%
@@ -205,7 +206,7 @@ train <- train[sparse.cols < .65]
 ```
 
 
-```{r, cache=TRUE}
+```{r Impute Missig Values, cache=TRUE}
 # View all Columns of NAs
 NA.rows <- tibble(RowNum = 1:nrow(train),
                   ID = train$ID,
@@ -221,6 +222,11 @@ train <- anti_join(train, sparse.rows, on=ID)
 # Specify NA values as a level in factor variables
 train <- train %>% mutate_if(is.factor, fct_explicit_na, na_level = "None")
 
+# find and remove single-level factors
+single.lvl.fct <- train %>% select_if(~type_sum(.) == "fct") %>% select_if(~ nlevels(.) <= 1) %>% names
+train <- train %>% select_at(vars(-one_of(single.lvl.fct)))
+
+
 ### Date-Time
 ## These columns all have identical rows of missing values, so this needs to be updated
 # Check count of NA for date columns and remove missing
@@ -231,46 +237,75 @@ dttm.cols.omit.NA <- train  %>% select(ID, dttm.cols) %>% filter_all(any_vars(is
 # filter out rows with NA values for remaining date-time 
 train <- anti_join(train, dttm.cols.omit.NA, on=ID)
 
+
+
 ### Characters
 # Check each column and assign NA = -1
 chr.cols <- train %>% filter_if(is.character, any_vars(is.na(.))) %>% select_if(is.character)
 
-for (i in 1:ncol(chr.cols)) {
-  for (j in 1:nrow(chr.cols[i])) {
-    if(is.na(chr.cols[j,i])) {
-       chr.cols[j,i] <- -1 
+for (i in 1:ncol(train[names(chr.cols)])) {
+  for (j in 1:nrow(train[names(chr.cols)][i])) {
+    if(is.na(train[names(chr.cols)][j,i])) {
+       train[names(chr.cols)][j,i] <- -1 
     } 
     }
-}  
+    }  
 
-#test for NAs 
-ifelse(map_int(chr.cols, function(x) {sum(is.na(x))}) == 0, "None", "Try Again")
+#test for chr NAs 
+ifelse(map_int(train[names(chr.cols)], function(x) {sum(is.na(x))}) == 0, "None", "Try Again")
 
-
-
-
-
-# Imputing NA's with median 
-train <- 
-  train %>% mutate_all(~ifelse(is.na(.), median(., na.rm = TRUE), .))
-
-test %>% 
-  mutate_all(~ifelse(is.na(.), median(., na.rm = TRUE), .)) -> test
+#remove leading/inner/trailing white space. 
+train[names(chr.cols)] <- train2[names(chr.cols)] %>% map(~str_squish(.)) %>% as.tibble()
 
 
-#View sparsity in row for data missing not at random (MNAR)
-train %>% ggplot_missing()
+### Numeric -- Impute NAs to Median
+# Find dbl columns, remove dttms
+dbl.cols <- train %>% select_if(is.double) %>% filter_if(is.double, any_vars(is.na(.))) 
+dbl.cols <- dbl.cols[-match(dttm.cols, names(dbl.cols))] 
 
-NA.TRUES <- train %>% apply(2, anyNA)
-na.trues <- train[NA.TRUES] %>% apply(1, anyNA)
+# Impute the medians
+train[names(dbl.cols)] <- train[names(dbl.cols)] %>% apply(2, function(x) {if(is.numeric(x)) ifelse(is.na(x),median(x,na.rm=T),x) else x})
+
+train %>% is.na %>% sum  # --> WE CLEAN YO
+
+train %>% select_if(~type_sum(.) == "dbl")  %>% filter_if(is.double, any_vars(is.na(.))) %>% as.matrix() %>% apply(2, median)
+
+```
 
 
-NA.TRUES <- head %>% apply(2, anyNA)
-na.trues <- head[NA.TRUES] %>% apply(1, anyNA)
+
+```{r recipes}
 
 
-# Occupation data train[,"VAR_0493"] 
-# data is assigned -1 for missing data by default   
+#test the recipes package 
+train.recipe <- recipe(target ~ ., data = train)
+train.recipe <- train.recipe %>% step_knnimpute(all_predictors())
+trained.train.recipe <- 
+train.data <- bake(trained_rec, newdata = train)
+
+trained_rec <- prep(train.recipe, training = train)
+
+
+
+#https://cran.r-project.org/web/packages/recipes/vignettes/Simple_Example.html
+library(recipes)
+library(rsample)
+
+data("credit_data")
+
+set.seed(55)
+train_test_split <- initial_split(credit_data)
+
+credit_train <- training(train_test_split)
+credit_test <- testing(train_test_split)
+
+# an initial reciepe
+rec_obj <- recipe(Status ~ ., data = credit_train)
+rec_obj
+
+Preprocessing
+rec_obj <- step_name(rec_obj, arguments)    ## or
+rec_obj <- rec_obj %>% step_name(arguments)
 ```
 53 entries are missing over 25% of their values.  918 are missing over 15%
 There are *significanlty more* missing values in the test set, so these should eventually be imputed
@@ -307,10 +342,10 @@ set.seed(7)
 fit.lda <- train(target~., data=train, method="lda", trControl=control, preProcess = 'knnImpute')
 # SVM
 set.seed(7)
-fit.svm <- train(target~., data=diabetes, method="svmRadial", preProcess = 'knnImpute')
+fit.svm <- train(target~., data=train, method="svmRadial", preProcess = 'knnImpute')
 # kNN
 set.seed(7)
-fit.knn <- train(target~., data=diabetes, method="knn", trControl=control,preProcess = 'knnImpute')
+fit.knn <- train(target~., data=train, method="knn", trControl=control,preProcess = 'knnImpute')
 # Random Forest
 set.seed(7)
 fit.rf <- train(target~., data=train, method="ranger", trControl=control, preProcess = 'knnImpute')
@@ -318,10 +353,61 @@ fit.rf <- train(target~., data=train, method="ranger", trControl=control, prePro
 results <- resamples(list(CART=fit.cart, LDA=fit.lda, SVM=fit.svm, KNN=fit.knn, RF=fit.rf))
 
 
+library(mlbench)
+library(caret)
+library(caretEnsemble)
+
+
+dtrain <- read.csv("student-mat.csv", header=TRUE, sep=";")
+formula <- G3~.
+dtrain$G3<-as.factor(dtrain$G3)
+
+xgcontrol <- trainControl(method="cv", number=10)
+
+fit.xgb <- train(target~., data=htrain, method="xgbTree", metric="Accuracy", trControl=xgcontrol, nthread = 4)
+fit.xgb
+fit.xgbl <- train(target~., data=htrain, method="xgbLinear", metric="Accuracy", trControl=xgcontrol, nthread =4)
+fit.xgbl
+
+htrain <- train %>% head(1000)
+
+
+
 # summarize the distributions
 summary(results)
 # boxplots of results
 bwplot(results)
+
+
+
+
+###
+ library(xgboost)
+   printArray <- function(label, array) {
+   cat(paste(label, paste(array, collapse = ", "), sep = ": \n"), "\n\n") }
+label <- as.numeric(train$target)
+data <- as.matrix(sapply(train, as.numeric))
+   
+   
+croosvalid <-
+xgb.cv(
+data = data,
+nfold = 10,
+nround = 10,
+label = label,
+prediction = TRUE,
+objective = "multi:softmax",
+num_class = 33
+)
+
+print(croosvalid)  
+printArray("Actual classes", label[label != croosvalid\$pred])  
+printArray("Predicted classes", croosvalid\$pred[label != croosvalid\$pred])  
+correctlyClassified <- length(label[label == croosvalid\$pred])  
+incorrectlyClassified <- length(label[label != croosvalid\$pred])  
+accurancy <- correctlyClassified * 100 / (correctlyClassified + incorrectlyClassified)  
+print(paste("Accurancy: ", accurancy)) 
+
 
 
 
@@ -476,7 +562,7 @@ frm <- as.formula(TARGET ~ .)
  
 predict1 <- xgboostRegressionModeller (train1, test1, frm,
                        nrounds = n.rounds, depth = n.depth, alpha = n.alpha, lambda = n.lambda)
-predict2 <-xgboostRegressionModeller (train2, test2, frm,
+predict2 <- xgboostRegressionModeller (train2, test2, frm,
                        nrounds = n.rounds, depth = n.depth, alpha = n.alpha, lambda = n.lambda)
  
 # prepare submission
@@ -547,38 +633,3 @@ ggplot_missing <- function(x){
 
 
 
-
-
-
-
-
-### Code Playground
-```{r}
-chr.cols <- train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>% names
-# bind the above table with row IDs to filter out NA rows
-chr.cols.omit.NA <- train  %>% select(ID, chr.cols) %>% filter_all(any_vars(is.na(.))) #%>% select(ID)
-      ### ~ identical to --> train %>% filter_if(is.character, any_vars(is.na(.))) %>% select_if(is.character) 
-      ### need a way to select_if() with ID
-# filter out rows with NA values for remaining date-time 
-train <- anti_join(train, dttm.cols.omit.NA, on=ID)
-
-
-chr.cols.test.NA
-
-wtf <- train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>%  filter_all(any_vars(is.na(.)))
-
-map int for each col in wtf then map_if == NA assign -1, value other wise
-map_int(chr.cols, function(x) {sum(is.na(x))}) == 0, "No NAs", 0)
-
-# if the count of NAs is non-zero, apppend the column names to a new vector
-ifelse(map_int(wtf, ~function(x) {(is.na(x))}) != TRUE, 1, 0) %>% ifelse(.>0,1,0)
-
-wtf %>% detect_index(is.na)
-
-
-train[ifelse(map_chr(train, type_sum) == "chr", TRUE,FALSE)] %>%  filter_all(any_vars(is.na(.)))
-
-
-
-
-```
