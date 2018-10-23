@@ -49,6 +49,19 @@ While cleaning, I found that `caret`'s built-in function `knnImpute` was not imp
 [^3]: Since date objects can be coerced to numerics, I could possibly create a random object generator for the 
 
 
+
+### Twitter Notes
+
+@a********s
+1. i think there's a lot of opportunity to use `mutate_if()` in your original cleaning, for example 
+data %>% mutate_if(more_than_95_unique_levels, as.factor)  where more_than_95_unique_levels is a function
+
+1. really though i would recommend using the recipes package for pre-processing more than anything.  it should automate most of the data cleaning and imputation you're doing
+
+1. in general, the vectors that grow on each iteration are an anti-pattern. they're problematic because R has to copy the vector each time due to pass-by-value instead of pass-by-reference.  i would either pre-allocate when you can, or otherwise use `purrr::reduce()`
+
+
+
 ## Libraries Used
 ```{r "Libraries", message=FALSE, warning=FALSE, results=FALSE, cache=TRUE}
 library(tidyverse)
@@ -266,11 +279,14 @@ dbl.cols <- dbl.cols[-match(dttm.cols, names(dbl.cols))]
 # Impute the medians
 train[names(dbl.cols)] <- train[names(dbl.cols)] %>% apply(2, function(x) {if(is.numeric(x)) ifelse(is.na(x),median(x,na.rm=T),x) else x})
 
-train %>% is.na %>% sum  # --> WE CLEAN YO
+train %>% is.na %>% sum  # --> WE CLEAN YO 
 
 train %>% select_if(~type_sum(.) == "dbl")  %>% filter_if(is.double, any_vars(is.na(.))) %>% as.matrix() %>% apply(2, median)
 
 ```
+
+
+
 
 
 
@@ -628,7 +644,6 @@ ggplot_missing <- function(x){
 }
 
 ```
-
 
 
 
